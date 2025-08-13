@@ -101,8 +101,8 @@ def create_payment_link(payload: CheckoutRequest):
         })
 
     try:
-        # v43: use payment_links client and pass `body={...}`
-        resp = sq.payment_links.create_payment_link(
+        # Use the Checkout API client on this SDK version
+        resp = sq.checkout.create_payment_link(
             body={
                 "idempotency_key": str(uuid.uuid4()),
                 "order": {
@@ -115,13 +115,18 @@ def create_payment_link(payload: CheckoutRequest):
                 },
             }
         )
-        return {"url": resp.payment_link.url}
+        # Depending on SDK, resp may be a typed object or dict-like
+        url = getattr(getattr(resp, "payment_link", None), "url", None)
+        if not url and isinstance(resp, dict):
+            url = resp.get("payment_link", {}).get("url")
+        if not url:
+            # fall back to attribute many SDKs expose
+            url = resp.body["payment_link"]["url"]
+        return {"url": url}
 
     except ApiError as e:
-        # Square SDK error with details
         detail = e.errors[0].detail if getattr(e, "errors", None) else str(e)
         raise HTTPException(status_code=502, detail=f"Square error: {detail}")
 
     except Exception as e:
-        # Catch-all so FastAPI returns JSON instead of plain 500
         raise HTTPException(status_code=500, detail=f"Unhandled server error: {e.__class__.__name__}: {e}")
