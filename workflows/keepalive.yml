@@ -1,0 +1,28 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    # every 15 minutes (GitHub's infra is best-effort; 5m is often throttled)
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}   # lets you run it manually from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Ping health endpoint
+        run: |
+          URL="${{ secrets.RENDER_HEALTH_URL }}"
+          if [ -z "$URL" ]; then
+            # fallback if you don't set the secret
+            URL="https://street-momentum.onrender.com/health"
+          fi
+          echo "Hitting: $URL"
+          code=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+          echo "Status: $code"
+          # Consider it a failure only if it's not 200 or 404 (404 is okay if you change the path)
+          if [ "$code" -ne 200 ]; then
+            echo "Non-200 response ($code)."
+            exit 0
+          fi
