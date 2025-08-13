@@ -3,6 +3,7 @@ import json
 import uuid
 import pathlib
 from typing import List, Dict, Any
+import httpx
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -101,28 +102,40 @@ def create_payment_link(payload: CheckoutRequest):
         })
 
     try:
-        # Use the Checkout API client on this SDK version
-        resp = sq.checkout.create_payment_link(
-            body={
-                "idempotency_key": str(uuid.uuid4()),
-                "order": {
-                    "location_id": SQUARE_LOCATION_ID,
-                    "line_items": line_items,
-                },
-                "checkout_options": {
-                    "redirect_url": payload.success_url,
-                    "ask_for_shipping_address": True,
-                },
+        # Build the HTTP request directly to Square's Payment Links API
+        base = "https://connect.squareupsandbox.com" if SQUARE_ENV.lower() == "sandbox" else "https://connect.squareup.com"
+        url = f"{base}/v2/online-checkout/payment-links"
+
+        body = {
+            "idempotency_key": str(uuid.uuid4()),
+            "order": {
+                "location_id": SQUARE_LOCATION_ID,
+                "line_items": line_items,
+            },
+            "checkout_options": {
+                "redirect_url": payload.success_url,
+                "ask_for_shipping_address": True
             }
-        )
-        # Depending on SDK, resp may be a typed object or dict-like
-        url = getattr(getattr(resp, "payment_link", None), "url", None)
-        if not url and isinstance(resp, dict):
-            url = resp.get("payment_link", {}).get("url")
-        if not url:
-            # fall back to attribute many SDKs expose
-            url = resp.body["payment_link"]["url"]
-        return {"url": url}
+        }
+
+        headers = {
+            "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
+            # Use a recent Square-Version; month updates are fine. Keep this in sync occasionally.
+            "Square-Version": "2025-07-17",
+            "Content-Type": "application/json",
+        }
+
+        with httpx.Client(timeout=15) as client:
+            r = client.post(url, headers=headers, json=body)
+            data = r.json()
+
+        if r.status_code >= 400:
+            # Surface Square's first error if available
+            err = data.get("errors", [{}])[0].get("detail", f"HTTP {r.status_code}")
+            raise HTTPException(status_code=502, detail=f"Square error: {err}")
+
+        link = data["payment_link"]["url"]
+        return {"url": link}
 
     except ApiError as e:
         detail = e.errors[0].detail if getattr(e, "errors", None) else str(e)
