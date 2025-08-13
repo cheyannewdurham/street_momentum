@@ -60,6 +60,18 @@ class CheckoutRequest(BaseModel):
 def health():
     return {"status": "ok"}
 
+@app.get("/")
+def root():
+    return {"ok": True, "routes": ["/health", "/products", "/create-payment-link", "/docs"]}
+
+@app.get("/config-check")
+def config_check():
+    return {
+        "square_env": SQUARE_ENV,
+        "has_token": bool(SQUARE_ACCESS_TOKEN),
+        "has_location": bool(SQUARE_LOCATION_ID),
+    }
+
 @app.get("/products")
 def products():
     return load_products()
@@ -104,6 +116,12 @@ def create_payment_link(payload: CheckoutRequest):
             }
         )
         return {"url": resp.payment_link.url}
+
     except ApiError as e:
-        err = e.errors[0].detail if getattr(e, "errors", None) else str(e)
-        raise HTTPException(status_code=502, detail=f"Square error: {err}")
+        # Square SDK error with details
+        detail = e.errors[0].detail if getattr(e, "errors", None) else str(e)
+        raise HTTPException(status_code=502, detail=f"Square error: {detail}")
+
+    except Exception as e:
+        # Catch-all so FastAPI returns JSON instead of plain 500
+        raise HTTPException(status_code=500, detail=f"Unhandled server error: {e.__class__.__name__}: {e}")
