@@ -1,0 +1,4 @@
+[
+  {"id": "banner-001", "name": "Windshield Banner", "price": 2499, "image_url": "https://placehold.co/800x500?text=Banner", "description": "Matte black vinyl banner.", "in_stock": true},
+  {"id": "stickers-001", "name": "Sticker Pack", "price": 999, "image_url": "https://placehold.co/800x500?text=Stickers", "description": "5 die‑cut stickers.", "in_stock": true}
+]
