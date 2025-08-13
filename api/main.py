@@ -89,21 +89,21 @@ def create_payment_link(payload: CheckoutRequest):
         })
 
     try:
-        # NEW SDK style: keyword args, returns typed model
-        resp = sq.checkout.create_payment_link(
-            idempotency_key=str(uuid.uuid4()),
-            order={
-                "location_id": SQUARE_LOCATION_ID,
-                "line_items": line_items,
-            },
-            checkout_options={
-                "redirect_url": payload.success_url,
-                "ask_for_shipping_address": True,
-            },
+        # v43: use payment_links client and pass `body={...}`
+        resp = sq.payment_links.create_payment_link(
+            body={
+                "idempotency_key": str(uuid.uuid4()),
+                "order": {
+                    "location_id": SQUARE_LOCATION_ID,
+                    "line_items": line_items,
+                },
+                "checkout_options": {
+                    "redirect_url": payload.success_url,
+                    "ask_for_shipping_address": True,
+                },
+            }
         )
-        # resp.payment_link is a typed model
         return {"url": resp.payment_link.url}
     except ApiError as e:
-        # Surface first error for easier debugging
         err = e.errors[0].detail if getattr(e, "errors", None) else str(e)
         raise HTTPException(status_code=502, detail=f"Square error: {err}")
