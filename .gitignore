@@ -1,0 +1,14 @@
+# Node / Next.js
+web/node_modules
+web/.next
+web/.turbo
+web/.vercel
+web/.env*
+# Python
+api/.venv
+api/__pycache__/
+*.pyc
+# Editors
+.idea
+.vscode
+.DS_Store
