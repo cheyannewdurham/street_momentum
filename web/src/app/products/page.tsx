@@ -1,8 +1,8 @@
-import { BuyButton } from '@/components/BuyButton'
+import { BuyButton } from '../components/BuyButton'
 
 export default async function ProductsPage() {
   const base = process.env.NEXT_PUBLIC_API_URL!
-  const res = await fetch(${base}/products, { next: { revalidate: 60 } })
+  const res = await fetch(`${base}/products`, { next: { revalidate: 60 } })
   const products = await res.json()
 
   return (
@@ -14,8 +14,7 @@ export default async function ProductsPage() {
           <p className="text-sm text-gray-500">{p.description}</p>
           <div className="mt-3 flex items-center justify-between">
             <span className="font-mono">${(p.price/100).toFixed(2)}</span>
-            {/* Use the BuyButton from above in a client wrapper */}
-            {/* <BuyButton productId={p.id} /> */}
+            <BuyButton productId={p.id} />
           </div>
         </div>
       ))}
