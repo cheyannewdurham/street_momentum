@@ -1,79 +1,78 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
+
+type ApiStatus = 'ok' | 'error' | 'checking...'
 
 export default function Home() {
-  const [api, setApi] = useState('checking...')
-  const [products, setProducts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const [api, setApi] = useState<ApiStatus>('checking...')
 
   useEffect(() => {
-    // Check API health
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`)
-      .then(r => r.json())
-      .then(d => setApi(d.status || 'unknown'))
-      .catch(() => setApi('error'))
-
-    // Load products
-    fetch(`${process.env.NEXT_PUBLIC_API_URL}/products`)
-      .then(r => r.json())
-      .then(setProducts)
-      .catch(() => setProducts([]))
-      .finally(() => setLoading(false))
-  }, [])
-
-  async function buy(productId: string) {
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/create-payment-link`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          items: [{ id: productId, quantity: 1 }],
-          success_url: `${window.location.origin}/success`,
-          cancel_url: `${window.location.origin}/products`
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Checkout failed')
-      window.location.href = data.url
-    } catch (err: any) {
-      alert(err.message || 'Could not start checkout')
+    async function check() {
+      try {
+        const r = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/health`)
+        const d: { status?: string } = await r.json()
+        setApi(d.status === 'ok' ? 'ok' : 'error')
+      } catch {
+        setApi('error')
+      }
     }
-  }
+    check()
+  }, [])
 
   return (
     <main className="p-8 max-w-5xl mx-auto">
-      <h1 className="text-3xl font-bold">Street Momentum</h1>
-      <p className="mt-2">API status: <span className="font-mono">{api}</span></p>
+      <header className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Street Momentum</h1>
+        <span
+          className={[
+            'rounded px-2 py-1 text-xs font-mono',
+            api === 'ok' && 'bg-green-100 text-green-700',
+            api === 'error' && 'bg-red-100 text-red-700',
+            api === 'checking...' && 'bg-gray-100 text-gray-700',
+          ]
+            .filter(Boolean)
+            .join(' ')}
+        >
+          API: {api}
+        </span>
+      </header>
 
-      {loading ? (
-        <p className="mt-6 text-gray-500">Loading products…</p>
-      ) : products.length === 0 ? (
-        <p className="mt-6 text-red-500">No products found.</p>
-      ) : (
-        <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {products.map((p) => (
-            <div key={p.id} className="border rounded-xl p-4">
-              <img
-                src={p.image_url}
-                alt={p.name}
-                className="w-full h-48 object-cover rounded-md"
-              />
-              <h3 className="mt-3 font-semibold">{p.name}</h3>
-              <p className="text-sm text-gray-500">{p.description}</p>
-              <div className="mt-3 flex items-center justify-between">
-                <span className="font-mono">${(p.price / 100).toFixed(2)}</span>
-                <button
-                  onClick={() => buy(p.id)}
-                  className="px-3 py-1 rounded bg-black text-white hover:bg-gray-800"
-                >
-                  Buy Now
-                </button>
-              </div>
-            </div>
-          ))}
+      <section className="mt-8 grid gap-6 md:grid-cols-2 items-center">
+        <div>
+          <h2 className="text-2xl font-semibold">Motorsport-inspired apparel & decals</h2>
+          <p className="mt-2 text-gray-600">
+            Fresh drops, clean lines, and community events. Browse products and check out securely
+            via Square.
+          </p>
+          <div className="mt-6 flex gap-3">
+            <Link
+              href="/products"
+              className="inline-block rounded-lg bg-black px-5 py-2.5 text-white hover:bg-gray-800"
+            >
+              Shop Now
+            </Link>
+            <Link
+              href="/about"
+              className="inline-block rounded-lg border px-5 py-2.5 hover:bg-gray-50"
+            >
+              About Us
+            </Link>
+          </div>
         </div>
-      )}
+
+        {/* Placeholder hero block; swap for an Image when you have assets */}
+        <div className="h-56 w-full rounded-2xl border bg-gradient-to-br from-gray-50 to-gray-100" />
+      </section>
+
+      <section className="mt-12">
+        <h3 className="text-lg font-semibold">Upcoming</h3>
+        <ul className="mt-2 list-disc pl-5 text-gray-600">
+          <li>Pop-up meet & merch table — see our calendar of events soon.</li>
+          <li>New banner colors & sticker packs.</li>
+        </ul>
+      </section>
     </main>
   )
 }

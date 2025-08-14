@@ -11,14 +11,15 @@ export function BuyButton({ productId }: Props) {
         body: JSON.stringify({
           items: [{ id: productId, quantity: 1 }],
           success_url: `${window.location.origin}/success`,
-          cancel_url: `${window.location.origin}/products`
-        })
+          cancel_url: `${window.location.origin}/products`,
+        }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.detail || 'Checkout failed')
+      const data: { url?: string; detail?: string } = await res.json()
+      if (!res.ok || !data.url) throw new Error(data.detail || 'Checkout failed')
       window.location.href = data.url
-    } catch (err: any) {
-      alert(err.message || 'Error creating checkout')
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error creating checkout'
+      alert(msg)
     }
   }
 
