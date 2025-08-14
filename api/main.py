@@ -1,18 +1,21 @@
+# api/main.py
 import os
-import json
 import uuid
-import pathlib
 from typing import List, Dict, Any
-import httpx
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# NEW Square SDK imports (v42+)
+# Square SDK (v42+)
 from square import Square
 from square.environment import SquareEnvironment
 from square.core.api_error import ApiError
+
+# DB (SQLAlchemy async)
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from db import get_session  # <- you created api/db.py earlier
 
 # ----- Config / Env -----
 API_NAME = os.getenv("API_NAME", "Street Momentum API")
@@ -22,8 +25,11 @@ SQUARE_ACCESS_TOKEN = os.getenv("SQUARE_ACCESS_TOKEN")
 SQUARE_LOCATION_ID = os.getenv("SQUARE_LOCATION_ID")
 SQUARE_ENV = os.getenv("SQUARE_ENV", "sandbox")  # "sandbox" or "production"
 
-# Build Square client (SDK v42+)
-square_env = SquareEnvironment.SANDBOX if SQUARE_ENV.lower() == "sandbox" else SquareEnvironment.PRODUCTION
+square_env = (
+    SquareEnvironment.SANDBOX
+    if SQUARE_ENV.lower() == "sandbox"
+    else SquareEnvironment.PRODUCTION
+)
 sq = Square(token=SQUARE_ACCESS_TOKEN, environment=square_env)
 
 # ----- FastAPI app & CORS -----
@@ -36,25 +42,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----- Data (simple JSON catalog) -----
-DATA_DIR = pathlib.Path(__file__).parent / "data"
-PRODUCTS_FILE = DATA_DIR / "products.json"
-
-def load_products() -> List[Dict[str, Any]]:
-    if not PRODUCTS_FILE.exists():
-        return []
-    with open(PRODUCTS_FILE, "r") as f:
-        return json.load(f)
-
 # ----- Models -----
 class CheckoutItem(BaseModel):
-    id: str
+    id: str          # variant_id
     quantity: int
 
 class CheckoutRequest(BaseModel):
     items: List[CheckoutItem]
     success_url: str
-    cancel_url: str  # kept for parity; Square Payment Links only uses redirect_url
+    cancel_url: str
+
+# ----- Utility -----
+def _require_square():
+    if not (SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID):
+        raise HTTPException(status_code=500, detail="Square is not configured")
 
 # ----- Routes -----
 @app.get("/health")
@@ -63,7 +64,7 @@ def health():
 
 @app.get("/")
 def root():
-    return {"ok": True, "routes": ["/health", "/products", "/create-payment-link", "/docs"]}
+    return {"ok": True, "routes": ["/health", "/products", "/create-payment-link", "/config-check", "/docs"]}
 
 @app.get("/config-check")
 def config_check():
@@ -74,72 +75,106 @@ def config_check():
     }
 
 @app.get("/products")
-def products():
-    return load_products()
+async def products(session: AsyncSession = Depends(get_session)):
+    """
+    Return sellable variants from Postgres (products + variants + inventory).
+    Shape matches your existing frontend expectations.
+    """
+    q = text("""
+      select
+        p.id as product_id,
+        p.name as product_name,
+        p.description,
+        v.id as variant_id,
+        v.label,
+        v.price_cents,
+        v.image_url,
+        coalesce(i.in_stock, 0) as in_stock
+      from product_variants v
+      join products p on p.id = v.product_id
+      left join inventory i on i.variant_id = v.id
+      where v.active = true
+      order by p.name, v.label nulls last;
+    """)
+    rows = (await session.execute(q)).mappings().all()
+
+    # Flatten to your simple product card shape; id is the VARIANT id.
+    return [
+        {
+            "id": r["variant_id"],
+            "name": r["product_name"] + (f" — {r['label']}" if r["label"] else ""),
+            "price": r["price_cents"],       # cents
+            "image_url": r["image_url"],
+            "description": r["description"],
+            "in_stock": (r["in_stock"] > 0),
+        }
+        for r in rows
+    ]
 
 @app.post("/create-payment-link")
-def create_payment_link(payload: CheckoutRequest):
-    if not (SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID):
-        raise HTTPException(status_code=500, detail="Square is not configured")
-
-    catalog = {p["id"]: p for p in load_products()}
+async def create_payment_link(
+    payload: CheckoutRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Builds a Square-hosted checkout link using server-side prices from Postgres.
+    Expects payload.items[*].id to be a VARIANT id.
+    """
+    _require_square()
     if not payload.items:
         raise HTTPException(status_code=400, detail="No items in cart")
 
-    # Build line items for the Square Order
-    line_items: List[Dict[str, Any]] = []
+    variant_ids = [i.id for i in payload.items]
+    q = text("""
+      select
+        v.id as variant_id,
+        p.name as product_name,
+        v.label,
+        v.price_cents,
+        v.image_url,
+        coalesce(i.in_stock, 0) as in_stock
+      from product_variants v
+      join products p on p.id = v.product_id
+      left join inventory i on i.variant_id = v.id
+      where v.id = any(:ids)
+    """)
+    rows = (await session.execute(q, {"ids": variant_ids})).mappings().all()
+    by_id: Dict[str, Any] = {r["variant_id"]: r for r in rows}
+
+    # Build Square line items
+    line_items = []
     for item in payload.items:
-        prod = catalog.get(item.id)
-        if not prod:
-            raise HTTPException(status_code=400, detail=f"Unknown product id={item.id}")
-        if not prod.get("in_stock", True):
-            raise HTTPException(status_code=400, detail=f"Out of stock: {prod['name']}")
+        r = by_id.get(item.id)
+        if not r:
+            raise HTTPException(status_code=400, detail=f"Unknown variant id={item.id}")
+        if r["in_stock"] <= 0:
+            raise HTTPException(status_code=400, detail=f"Out of stock: {r['product_name']}")
+        name = r["product_name"] + (f" — {r['label']}" if r["label"] else "")
         line_items.append({
-            "name": prod["name"],
+            "name": name,
             "quantity": str(item.quantity),
-            "base_price_money": {"amount": int(prod["price"]), "currency": "USD"},
-            "note": prod.get("description", "")
+            "base_price_money": {"amount": int(r["price_cents"]), "currency": "USD"},
         })
 
+    # Create the hosted checkout link via Square Checkout API
     try:
-        # Build the HTTP request directly to Square's Payment Links API
-        base = "https://connect.squareupsandbox.com" if SQUARE_ENV.lower() == "sandbox" else "https://connect.squareup.com"
-        url = f"{base}/v2/online-checkout/payment-links"
-
-        body = {
-            "idempotency_key": str(uuid.uuid4()),
-            "order": {
-                "location_id": SQUARE_LOCATION_ID,
-                "line_items": line_items,
-            },
-            "checkout_options": {
-                "redirect_url": payload.success_url,
-                "ask_for_shipping_address": True
+        resp = sq.checkout.create_payment_link(
+            body={
+                "idempotency_key": str(uuid.uuid4()),
+                "order": {
+                    "location_id": SQUARE_LOCATION_ID,
+                    "line_items": line_items,
+                },
+                "checkout_options": {
+                    "redirect_url": payload.success_url,
+                    "ask_for_shipping_address": True,
+                },
             }
-        }
-
-        headers = {
-            "Authorization": f"Bearer {SQUARE_ACCESS_TOKEN}",
-            # Use a recent Square-Version; month updates are fine. Keep this in sync occasionally.
-            "Square-Version": "2025-07-17",
-            "Content-Type": "application/json",
-        }
-
-        with httpx.Client(timeout=15) as client:
-            r = client.post(url, headers=headers, json=body)
-            data = r.json()
-
-        if r.status_code >= 400:
-            # Surface Square's first error if available
-            err = data.get("errors", [{}])[0].get("detail", f"HTTP {r.status_code}")
-            raise HTTPException(status_code=502, detail=f"Square error: {err}")
-
-        link = data["payment_link"]["url"]
-        return {"url": link}
+        )
+        return {"url": resp.payment_link.url}
 
     except ApiError as e:
         detail = e.errors[0].detail if getattr(e, "errors", None) else str(e)
         raise HTTPException(status_code=502, detail=f"Square error: {detail}")
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unhandled server error: {e.__class__.__name__}: {e}")
