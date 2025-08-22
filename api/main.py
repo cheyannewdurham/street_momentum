@@ -33,10 +33,14 @@ square_env = (
 sq = Square(token=SQUARE_ACCESS_TOKEN, environment=square_env)
 
 # ----- FastAPI app & CORS -----
+raw_origins = os.getenv("CORS_ORIGIN", "*")
+origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+allow_all = origins == ["*"]
+
 app = FastAPI(title=API_NAME)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[CORS_ORIGIN] if CORS_ORIGIN != "*" else ["*"],
+    allow_origins=["*"] if allow_all else origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
